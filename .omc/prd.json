@@ -1,0 +1,134 @@
+{
+  "title": "ADHD-Dev CLI Tool (Plan B)",
+  "description": "CLI-integrated focus tool for ADHD developers using Daemon + CLI + Claude Code Hooks architecture",
+  "stories": [
+    {
+      "id": "US-001",
+      "title": "Project scaffolding and CLI shell",
+      "priority": 1,
+      "passes": true,
+      "acceptanceCriteria": [
+        "package.json exists with name 'adhd-dev', type 'module', bin field pointing to dist/cli/index.js",
+        "tsconfig.json configured for ESM with strict mode",
+        "tsup.config.ts configured to bundle src/cli/index.ts",
+        "src/cli/index.ts uses commander with subcommands: status, where, timer, today, flow, dash, daemon, go, doctor, config, init, reset, install-hooks, uninstall-hooks",
+        "src/core/paths.ts exports ADHD_DEV_HOME (~/.adhd-dev), CLAUDE_HOME (~/.claude), and sub-paths",
+        "src/core/config.ts creates ~/.adhd-dev/ and config.json on first access with sensible defaults",
+        "src/core/logger.ts provides structured logging (error/warn/info/debug) to ~/.adhd-dev/logs/",
+        "Running 'npx tsx src/cli/index.ts status' outputs 'No active sessions' and creates ~/.adhd-dev/config.json",
+        "TypeScript compiles with zero errors (npx tsc --noEmit)"
+      ]
+    },
+    {
+      "id": "US-002",
+      "title": "Claude session discovery and .jsonl parser",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "src/services/path-encoder.ts: encodePath('/Users/hona.mind/Dev/playground/adhd-dev') returns '-Users-hona-mind-Dev-playground-adhd-dev' (replaces / and . with -)",
+        "src/services/path-encoder.ts: includes directory scan fallback when primary encoding fails to match",
+        "src/services/claude-session-discovery.ts: reads ~/.claude/sessions/PID.json, extracts {pid, sessionId, cwd, startedAt}",
+        "src/services/claude-session-discovery.ts: joins PID→sessionId→encoded-cwd→UUID.jsonl correctly",
+        "src/services/claude-session-discovery.ts: determines session state (active/idle/stale/orphan) based on PID alive + .jsonl recency",
+        "src/services/claude-session-parser.ts: parses .jsonl and extracts last N human/assistant exchanges",
+        "src/services/claude-session-parser.ts: handles corrupted/empty .jsonl without crashing",
+        "Unit tests pass using tests/fixtures/mock-claude-home/ (not real ~/.claude/)",
+        "'adhd where' lists active sessions with last exchange summary",
+        "TypeScript compiles with zero errors"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Focus timer engine with basic dopamine signals",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "src/services/timer-engine.ts: supports start(minutes), stop(), status(), preset(name)",
+        "Timer uses Date-based absolute time comparison (sleep-safe), not setInterval ticks",
+        "Timer state persisted to ~/.adhd-dev/timer-state.json (survives process restart)",
+        "Presets available: pomodoro (25/5), desktime (52/17), ultradian (90/20)",
+        "src/services/flow-protection.ts: flow mode suppresses timer notifications when active",
+        "src/services/stats-aggregator.ts: tracks daily focus time and completed session count",
+        "src/services/notification.ts: sends terminal bell (\\a) + node-notifier system notification on timer complete",
+        "'adhd timer start 1' starts a 1-minute timer; 'adhd timer status' shows remaining time",
+        "'adhd flow on' enables flow mode; 'adhd flow off' disables it",
+        "'adhd today' shows today's focus time and session count",
+        "Unit tests for timer engine, flow protection, and stats aggregator pass",
+        "TypeScript compiles with zero errors"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Daemon process with IPC and DopamineService",
+      "priority": 4,
+      "passes": true,
+      "acceptanceCriteria": [
+        "src/daemon/index.ts: forks as background process, writes PID to ~/.adhd-dev/adhd-dev.pid",
+        "src/daemon/ipc-server.ts: creates Unix domain socket at ~/.adhd-dev/adhd-dev.sock",
+        "CLI client communicates with daemon via socket; falls back to file-based reads when daemon is down",
+        "src/daemon/file-watcher.ts: watches ~/.claude/sessions/ and ~/.claude/projects/ via chokidar",
+        "New Claude session detected within 5 seconds of creation",
+        "src/services/dopamine-service.ts: DopamineService with AdaptiveEngine + SignalEmitter",
+        "AdaptiveEngine: collects 7-day baseline, adjusts signal frequency/intensity via rules (not ML)",
+        "SignalEmitter: max 1 prominent signal per 5 min, 3 consecutive ignores → quiet mode",
+        "Ethical boundaries hardcoded: no streaks, no loss framing, no comparison, no 'wasted X min'",
+        "DopamineService writes prompt-state.json with pulse/badge/timer/timeOfDay/returnTo/warmth fields",
+        "'adhd daemon start' starts daemon; 'adhd daemon stop' stops it; 'adhd daemon status' shows state",
+        "Stale PID/socket detection and cleanup on daemon start",
+        "Data purge runs daily: removes records older than 30 days",
+        "TypeScript compiles with zero errors"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Shell prompt, tmux integration, and TUI dashboard",
+      "priority": 5,
+      "passes": true,
+      "acceptanceCriteria": [
+        "src/cli/commands/prompt-status.ts: reads prompt-state.json and outputs ANSI-formatted string",
+        "prompt-status execution time < 50ms (file read only, no daemon IPC needed)",
+        "prompt-status returns empty string when daemon is not running (graceful degradation)",
+        "src/cli/commands/tmux-status.ts: outputs richer status for tmux status-right",
+        "src/tui/App.tsx: ink-based TUI dashboard with SessionList, TimerWidget, StatsBar, ContextCard, DopamineBar",
+        "TUI shows Context Warmth colors: warm(yellow) <5min, medium(white) <30min, cool(gray) >1h",
+        "TUI keybindings: q=quit, t=timer toggle, w=where detail, g=go to session, r=refresh",
+        "'adhd dash' launches TUI dashboard with live data",
+        "TypeScript compiles with zero errors"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Claude Code hooks and adhd init --full onboarding",
+      "priority": 6,
+      "passes": true,
+      "acceptanceCriteria": [
+        "hooks/session-start.sh: lightweight shell script (~5ms) that sends JSON to Unix socket via nc",
+        "hooks/session-start.sh: falls back to appending to ~/.adhd-dev/events.jsonl when daemon is down",
+        "src/services/hook-installer.ts: atomic write (temp file + rename) for settings.json modification",
+        "src/services/hook-installer.ts: keeps 3 backup versions of settings.json",
+        "'adhd install-hooks' adds hooks to ~/.claude/settings.json; 'adhd uninstall-hooks' restores from backup",
+        "src/services/shell-integrator.ts: detects current shell (zsh/bash) and adds prompt integration",
+        "Shell wrapper 'adhd() { eval \"$(command adhd-dev \"$@\")\" }' installed for adhd go support",
+        "'adhd init --full' completes all setup in one command: init + hooks + daemon + prompt + doctor",
+        "'adhd doctor' reports status of all components (daemon, hooks, prompt, db, sessions)",
+        "'adhd reset' removes all data, hooks, and prompt integration cleanly",
+        "TypeScript compiles with zero errors"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Build pipeline, tests, and npm publish readiness",
+      "priority": 7,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tsup builds successfully with zero errors",
+        "Built binary is executable: node dist/cli/index.js --help shows all commands",
+        "All unit tests pass (session discovery, path encoder, timer engine, adaptive engine, signal emitter, data purger)",
+        "All tests use tests/fixtures/mock-claude-home/ (no real ~/.claude/ dependency)",
+        "vitest runs with zero failures",
+        "npm pack creates a valid tarball; npm install -g from tarball makes 'adhd-dev' command available",
+        "TypeScript compiles with zero errors (npx tsc --noEmit)"
+      ]
+    }
+  ]
+}

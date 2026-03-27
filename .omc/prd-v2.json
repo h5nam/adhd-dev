@@ -1,0 +1,11 @@
+{
+  "title": "ADHD-Dev v2: Agent Dashboard with Pixel-Art Crawfish",
+  "description": "Upgrade the TUI dashboard to monitor Claude Code agents as pixel-art crawfish that level up based on token usage, with dopamine loop integration",
+  "stories": [
+    { "id": "US-101", "title": "Crawfish ASCII art system with 5 evolution stages", "priority": 1, "passes": true },
+    { "id": "US-102", "title": "Agent tracker service reading Claude Code session data", "priority": 2, "passes": true },
+    { "id": "US-103", "title": "Upgraded TUI dashboard with crawfish agent cards", "priority": 3, "passes": true },
+    { "id": "US-104", "title": "Token histogram and progress visualization", "priority": 4, "passes": true },
+    { "id": "US-105", "title": "Integration tests and build verification", "priority": 5, "passes": true }
+  ]
+}

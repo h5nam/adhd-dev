@@ -1,0 +1,4 @@
+{"type":"human","content":"implement session discovery for CLI tool","timestamp":"2025-01-01T10:00:00.000Z"}
+{"type":"assistant","content":"I'll implement session discovery by scanning ~/.claude/sessions/*.json files and checking process liveness.","timestamp":"2025-01-01T10:00:05.000Z","usage":{"input_tokens":100,"output_tokens":50}}
+{"type":"human","content":"also add path encoding","timestamp":"2025-01-01T10:01:00.000Z"}
+{"type":"assistant","content":"Path encoding converts filesystem paths to Claude Code's directory naming convention by replacing / and . with -.","timestamp":"2025-01-01T10:01:10.000Z","usage":{"input_tokens":200,"output_tokens":150},"tool_use":[{"name":"Write"}]}

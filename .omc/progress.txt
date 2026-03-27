@@ -1,0 +1,30 @@
+# ADHD-Dev CLI Tool — Implementation Progress
+
+## Iteration 1 (2026-03-24)
+
+### Completed Stories
+- US-001: Project scaffolding (TypeScript ESM, commander CLI, 16 subcommands)
+- US-002: Session discovery (path-encoder hybrid, PID→sessionId→UUID.jsonl join, .jsonl parser)
+- US-003: Timer engine (Date-based sleep-safe, presets, flow protection, stats)
+- US-004: Daemon + IPC + DopamineService (Unix socket, chokidar, AdaptiveEngine, SignalEmitter)
+- US-005: TUI dashboard (raw ANSI, no ink dependency), prompt-status, tmux-status, go command
+- US-006: Hook installer (atomic write + backup), shell integrator, init --full, doctor, reset
+- US-007: Build pipeline (tsup dual entry CLI+daemon), 51 tests, npm pack ready
+
+### Key Decisions During Implementation
+- Used raw ANSI TUI instead of ink/React — reduces deps, 53KB bundle
+- Removed sql.js dependency — JSON file storage sufficient for MVP data volumes
+- Added separate tsup entry for daemon — enables fork() to work after npm global install
+- Shell hooks are bash scripts (~5ms) not TypeScript — avoids Node.js cold-start overhead
+
+### Learnings
+- Claude Code path encoding replaces both / and . with - (not just /)
+- ~/.claude/sessions/PID.json uses actual PID numbers, not UUIDs
+- Session files are at ~/.claude/projects/{encoded-cwd}/{sessionId}.jsonl (no sessions/ subdirectory)
+- chokidar v4 uses ESM by default, integrates cleanly
+
+### Final Metrics
+- TypeScript: 0 errors
+- Tests: 51 passed (5 test files)
+- Build: CLI 53.57KB + Daemon 27.00KB
+- npm pack: ~114KB tarball
