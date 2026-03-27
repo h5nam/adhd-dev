@@ -28,11 +28,39 @@ type ViewMode = 'grid' | 'detail';
 let viewMode: ViewMode = 'grid';
 let selectedAgentIndex = -1;
 const previousLevels = new Map<string, number>();
+const previousTokens = new Map<string, number>(); // track token changes
 const levelUpFlash = new Map<string, number>(); // sessionId -> remaining flash cycles
 let renderFrame = 0;
 
+// CJK/fullwidth chars take 2 columns in terminal
+function charWidth(code: number): number {
+  // CJK Unified Ideographs, Hangul, Katakana, fullwidth forms, etc.
+  if (
+    (code >= 0x1100 && code <= 0x115F) ||  // Hangul Jamo
+    (code >= 0x2E80 && code <= 0x303E) ||  // CJK Radicals
+    (code >= 0x3040 && code <= 0x33BF) ||  // Hiragana, Katakana, CJK
+    (code >= 0x3400 && code <= 0x4DBF) ||  // CJK Extension A
+    (code >= 0x4E00 && code <= 0x9FFF) ||  // CJK Unified
+    (code >= 0xAC00 && code <= 0xD7AF) ||  // Hangul Syllables
+    (code >= 0xF900 && code <= 0xFAFF) ||  // CJK Compat
+    (code >= 0xFE30 && code <= 0xFE6F) ||  // CJK Compat Forms
+    (code >= 0xFF01 && code <= 0xFF60) ||  // Fullwidth Forms
+    (code >= 0xFFE0 && code <= 0xFFE6) ||  // Fullwidth Signs
+    (code >= 0x20000 && code <= 0x2FA1F)   // CJK Extensions
+  ) return 2;
+  return 1;
+}
+
+function displayWidth(str: string): number {
+  let w = 0;
+  for (const ch of str) {
+    w += charWidth(ch.codePointAt(0)!);
+  }
+  return w;
+}
+
 function stripAnsi(str: string): number {
-  return str.replace(/\x1b\[[0-9;]*m/g, '').length;
+  return displayWidth(str.replace(/\x1b\[[0-9;]*m/g, ''));
 }
 
 function padRight(str: string, width: number): string {
@@ -79,7 +107,61 @@ function stateIcon(state: AgentInfo['state']): string {
   }
 }
 
-// Check and track level-ups
+// ── Natural language activity description ──
+// Extracts what the agent is actually doing from the last exchange content
+
+function describeActivity(agent: AgentInfo): string {
+  if (agent.state === 'sleeping') return '휴식 중...';
+  if (agent.state === 'complete') return '작업 완료!';
+  if (agent.state === 'idle') return '대기 중...';
+
+  const exchange = agent.lastExchange;
+  if (!exchange) return '작업 중...';
+
+  // Extract meaningful first sentence from Claude's last response
+  return summarizeExchange(exchange, CARD_INNER_WIDTH - 4); // -4 for icon + padding
+}
+
+function summarizeExchange(text: string, maxLen: number): string {
+  const lines = text.trim().split('\n').filter(l => l.trim().length > 0);
+  if (lines.length === 0) return '작업 중...';
+
+  let summary = '';
+
+  // Look for action-oriented lines (skip meta/filler)
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('#') || trimmed.startsWith('```') || trimmed.startsWith('---')) continue;
+    if (trimmed.startsWith('|')) continue; // skip table rows
+    if (trimmed.length < 5) continue;
+    summary = trimmed;
+    break;
+  }
+
+  if (!summary) summary = lines[0].trim();
+
+  // Remove markdown formatting
+  summary = summary.replace(/\*\*/g, '').replace(/`/g, '').replace(/^\s*[-*]\s+/, '');
+
+  // Truncate by display width (CJK chars = 2 cols)
+  let w = 0;
+  let cutIdx = summary.length;
+  for (let i = 0; i < summary.length; i++) {
+    const cw = charWidth(summary.codePointAt(i)!);
+    if (w + cw > maxLen - 1) { // -1 for '…'
+      cutIdx = i;
+      break;
+    }
+    w += cw;
+  }
+  if (cutIdx < summary.length) {
+    summary = summary.slice(0, cutIdx) + '…';
+  }
+
+  return summary;
+}
+
+// Check and track level-ups + token deltas
 function trackLevelUps(agents: AgentInfo[]): void {
   for (const agent of agents) {
     const prev = previousLevels.get(agent.sessionId);
@@ -87,7 +169,14 @@ function trackLevelUps(agents: AgentInfo[]): void {
       levelUpFlash.set(agent.sessionId, 3);
     }
     previousLevels.set(agent.sessionId, agent.level);
+    previousTokens.set(agent.sessionId, agent.tokenUsage);
   }
+}
+
+function getTokenDelta(agent: AgentInfo): number {
+  const prev = previousTokens.get(agent.sessionId);
+  if (prev === undefined) return 0;
+  return agent.tokenUsage - prev;
 }
 
 // Decrement flash counters
@@ -101,8 +190,22 @@ function decrementFlash(): void {
   }
 }
 
-const CARD_INNER_WIDTH = 30; // inner content width (fits compact halfblock art)
-const CARD_WIDTH = CARD_INNER_WIDTH + 2; // includes border chars
+// Dynamic card dimensions — recomputed each render frame
+function getCardDimensions(): { inner: number; outer: number } {
+  const cols = process.stdout.columns ?? 120;
+  const twoCol = cols >= 90;
+  // 2-column: total = 2*outer + 4 (gap+outer borders) must fit in cols-2 (dashboard borders)
+  // So outer = floor((cols - 6) / 2), inner = outer - 2
+  const inner = twoCol
+    ? Math.floor((cols - 6) / 2) - 2
+    : cols - 6;
+  const clamped = Math.max(28, Math.min(inner, 60));
+  return { inner: clamped, outer: clamped + 2 };
+}
+
+// Computed per render — use these via getCardDimensions()
+let CARD_INNER_WIDTH = getCardDimensions().inner;
+let CARD_WIDTH = getCardDimensions().outer;
 
 function renderCard(agent: AgentInfo, index: number): string[] {
   const lines: string[] = [];
@@ -129,7 +232,7 @@ function renderCard(agent: AgentInfo, index: number): string[] {
   }
 
   // Crawfish art (compact halfblock for grid cards)
-  const art = getCrawfishArt(agent.level, agent.state);
+  const art = getCrawfishArt(agent.level, agent.state, renderFrame);
   for (const artLine of art) {
     const artVisible = stripAnsi(artLine);
     const leftPad = Math.floor((CARD_INNER_WIDTH - artVisible) / 2);
@@ -139,7 +242,7 @@ function renderCard(agent: AgentInfo, index: number): string[] {
   addCardLine('');
 
   // Level progress
-  const levelLine = renderLevelProgress(agent.level, agent.tokenUsage);
+  const levelLine = renderLevelProgress(agent.level, agent.tokenUsage, getTokenDelta(agent));
   // Truncate if too long
   const lvlVisible = stripAnsi(levelLine);
   if (lvlVisible <= CARD_INNER_WIDTH) {
@@ -150,26 +253,17 @@ function renderCard(agent: AgentInfo, index: number): string[] {
     addCardLine(shortLevel);
   }
 
-  // Tools
-  if (agent.tools.length > 0) {
-    const toolStr = `\uD83D\uDD27 ${agent.tools.slice(0, 3).join(', ')}`;
-    const visible = stripAnsi(toolStr);
-    if (visible <= CARD_INNER_WIDTH) {
-      addCardLine(toolStr);
-    } else {
-      addCardLine(`\uD83D\uDD27 ${agent.tools.slice(0, 2).join(', ')}`);
-    }
-  }
-
-  // State + activity keyword for working agents
-  const stateStr = `${stateIcon(agent.state)} ${stateColor(agent.state)(agent.state)}`;
-  if (agent.state === 'working' && agent.lastExchange) {
-    // Show brief keyword of what the agent is doing
-    const keyword = agent.lastExchange.slice(0, CARD_INNER_WIDTH - 4).split('\n')[0];
-    addCardLine(stateStr);
-    addCardLine(chalk.dim(`  "${keyword.length < agent.lastExchange.length ? keyword + '…' : keyword}"`));
+  // Activity description (natural language)
+  const activity = describeActivity(agent);
+  const activityLine = `${stateIcon(agent.state)} ${stateColor(agent.state)(activity)}`;
+  const actVisible = stripAnsi(activityLine);
+  if (actVisible <= CARD_INNER_WIDTH) {
+    addCardLine(activityLine);
   } else {
-    addCardLine(stateStr);
+    // Truncate activity to fit card
+    const maxLen = CARD_INNER_WIDTH - 4;
+    const truncated = activity.slice(0, maxLen) + '…';
+    addCardLine(`${stateIcon(agent.state)} ${stateColor(agent.state)(truncated)}`);
   }
 
   // Bottom border
@@ -226,9 +320,13 @@ function renderGridView(
 ): string[] {
   const cols = process.stdout.columns ?? 80;
   const rows = process.stdout.rows ?? 24;
-  const twoColumn = cols >= 80;
+  // Recompute card dimensions for current terminal size
+  const dims = getCardDimensions();
+  CARD_INNER_WIDTH = dims.inner;
+  CARD_WIDTH = dims.outer;
+  const twoColumn = cols >= 90;
   const innerWidth = twoColumn
-    ? Math.min(cols - 2, (CARD_WIDTH * 2) + 6)
+    ? Math.min(cols - 2, (CARD_WIDTH * 2) + 4)
     : Math.min(cols - 2, CARD_WIDTH + 4);
 
   const outputLines: string[] = [];
@@ -346,7 +444,7 @@ function renderDetailView(agent: AgentInfo, innerWidth: number): string[] {
   addLine('');
 
   // Full crawfish art centered (high-res for detail view)
-  const art = getCrawfishHires(agent.level, agent.state);
+  const art = getCrawfishHires(agent.level, agent.state, renderFrame);
   for (const artLine of art) {
     const artVisible = stripAnsi(artLine);
     const leftPad = Math.floor((innerWidth - artVisible) / 2);
@@ -356,19 +454,15 @@ function renderDetailView(agent: AgentInfo, innerWidth: number): string[] {
   addLine('');
 
   // Level progress
-  addLine('  ' + renderLevelProgress(agent.level, agent.tokenUsage));
+  addLine('  ' + renderLevelProgress(agent.level, agent.tokenUsage, getTokenDelta(agent)));
 
-  // State + tool
-  const stateStr = `  ${stateIcon(agent.state)} State: ${stateColor(agent.state)(agent.state)}`;
-  addLine(stateStr);
+  // Activity description (natural language)
+  const activity = describeActivity(agent);
+  addLine(`  ${stateIcon(agent.state)} ${stateColor(agent.state)(activity)}`);
 
-  if (agent.currentTool) {
-    addLine(`  \uD83D\uDD27 Current tool: ${chalk.cyan(agent.currentTool)}`);
-  }
-
-  // All tools
+  // Show recent tools as subtle context
   if (agent.tools.length > 0) {
-    addLine(`  Tools: ${agent.tools.join(', ')}`);
+    addLine(`  ${chalk.dim('도구: ' + agent.tools.slice(0, 5).join(' → '))}`);
   }
 
   // Activity

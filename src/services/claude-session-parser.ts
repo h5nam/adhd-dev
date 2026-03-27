@@ -5,6 +5,10 @@ interface JsonlMessage {
   type?: string;
   role?: string;
   content?: unknown;
+  message?: {
+    content?: unknown;
+    role?: string;
+  };
   timestamp?: string;
 }
 
@@ -23,14 +27,22 @@ function extractContent(content: unknown): string {
   return '';
 }
 
+function resolveRoleStr(obj: JsonlMessage): string | undefined {
+  // Real Claude JSONL: { "type": "assistant", "message": { "role": "assistant", "content": [...] } }
+  // Also check obj.type, obj.role, obj.message.role
+  if (obj.type === 'human' || obj.type === 'assistant') return obj.type;
+  if (obj.role === 'human' || obj.role === 'assistant') return obj.role;
+  if (obj.message?.role === 'human' || obj.message?.role === 'assistant') return obj.message.role;
+  return undefined;
+}
+
 function isHumanOrAssistant(obj: JsonlMessage): obj is JsonlMessage & { role: 'human' | 'assistant' } {
-  const role = obj.type === 'human' || obj.type === 'assistant' ? obj.type : obj.role;
+  const role = resolveRoleStr(obj);
   return role === 'human' || role === 'assistant';
 }
 
 function resolveRole(obj: JsonlMessage): 'human' | 'assistant' {
-  const r = obj.type === 'human' || obj.type === 'assistant' ? obj.type : obj.role;
-  return r as 'human' | 'assistant';
+  return resolveRoleStr(obj) as 'human' | 'assistant';
 }
 
 /**
@@ -57,7 +69,9 @@ export function parseLastExchanges(jsonlPath: string, count: number): ParsedExch
     try {
       const obj = JSON.parse(trimmed) as JsonlMessage;
       if (!isHumanOrAssistant(obj)) continue;
-      const content = extractContent(obj.content);
+      // Real Claude JSONL: content in obj.message.content; legacy: obj.content
+      const rawContent = obj.message?.content ?? obj.content;
+      const content = extractContent(rawContent);
       if (!content) continue;
       const exchange: ParsedExchange = {
         role: resolveRole(obj),

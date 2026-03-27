@@ -18,6 +18,26 @@ export function calculateLevel(tokens: number): number {
   return level;
 }
 
+// Token decay: inactive agents slowly lose effective tokens
+// - idle: 2% per hour (user may come back soon)
+// - sleeping: 5% per hour (truly inactive — level drops faster)
+// Returns the decayed token count (display only — actual jsonl tokens unchanged)
+const DECAY_RATE_IDLE = 0.02;    // 2% per hour
+const DECAY_RATE_SLEEPING = 0.05; // 5% per hour
+
+function applyTokenDecay(tokens: number, state: AgentState, inactiveMs: number): number {
+  if (state === 'working' || state === 'complete') return tokens;
+  if (inactiveMs <= 0 || tokens <= 0) return tokens;
+
+  const hours = inactiveMs / (60 * 60 * 1000);
+  const rate = state === 'sleeping' ? DECAY_RATE_SLEEPING : DECAY_RATE_IDLE;
+
+  // Exponential decay: tokens * (1 - rate)^hours
+  // Floor at level 1 threshold (never drop below Lv1)
+  const decayed = tokens * Math.pow(1 - rate, hours);
+  return Math.max(0, Math.floor(decayed));
+}
+
 // Actual Claude Code .jsonl format:
 // { "message": { "usage": { "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens" }, "content": [{ "type": "tool_use", "name": "..." }] }, "type": "assistant" }
 interface JsonlEntry {
@@ -168,15 +188,16 @@ export async function discoverAgents(overrideSessionsDir?: string): Promise<Agen
 
   for (const session of sessions) {
     const jsonlPath = session.jsonlPath;
-    const tokenUsage = jsonlPath ? countTokensFromJsonl(jsonlPath) : 0;
-    const level = calculateLevel(tokenUsage);
+    const rawTokens = jsonlPath ? countTokensFromJsonl(jsonlPath) : 0;
 
     let state: AgentState;
+    let inactiveMs = 0;
     if (session.state === 'active') {
       if (jsonlPath) {
         try {
           const st = statSync(jsonlPath);
           const ageMs = now - st.mtime.getTime();
+          inactiveMs = ageMs;
           if (ageMs <= WORKING_THRESHOLD_MS) {
             state = 'working';
           } else if (ageMs <= IDLE_THRESHOLD_MS) {
@@ -192,19 +213,30 @@ export async function discoverAgents(overrideSessionsDir?: string): Promise<Agen
       }
     } else if (session.state === 'idle') {
       state = 'idle';
+      // Use lastActivity to calculate inactive time
+      inactiveMs = session.lastActivity ? now - session.lastActivity.getTime() : 0;
     } else {
       // stale or orphan
       state = 'sleeping';
+      inactiveMs = session.lastActivity ? now - session.lastActivity.getTime() : 0;
     }
+
+    // Apply token decay for inactive agents
+    const tokenUsage = applyTokenDecay(rawTokens, state, inactiveMs);
+    const level = calculateLevel(tokenUsage);
 
     const currentTool = jsonlPath ? extractCurrentTool(jsonlPath) : null;
     const tools = jsonlPath ? extractRecentTools(jsonlPath) : [];
 
     let lastExchange: string | null = null;
     if (jsonlPath) {
-      const exchanges = parseLastExchanges(jsonlPath, 1);
-      if (exchanges.length > 0) {
-        lastExchange = exchanges[exchanges.length - 1].content;
+      // Get last few exchanges to find the most recent assistant message
+      const exchanges = parseLastExchanges(jsonlPath, 5);
+      for (let i = exchanges.length - 1; i >= 0; i--) {
+        if (exchanges[i].role === 'assistant' && exchanges[i].content.trim()) {
+          lastExchange = exchanges[i].content;
+          break;
+        }
       }
     }
 
@@ -214,6 +246,7 @@ export async function discoverAgents(overrideSessionsDir?: string): Promise<Agen
       cwd: session.cwd,
       state,
       tokenUsage,
+      rawTokenUsage: rawTokens,
       level,
       currentTool,
       tools,

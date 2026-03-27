@@ -31,7 +31,8 @@ export interface AgentInfo {
   projectName: string;
   cwd: string;
   state: AgentState;
-  tokenUsage: number;
+  tokenUsage: number;       // effective (after decay)
+  rawTokenUsage: number;    // original (no decay)
   level: number;
   currentTool: string | null;
   tools: string[];

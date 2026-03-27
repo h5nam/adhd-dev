@@ -49,16 +49,24 @@ export function renderTokenBar(current: number, max: number, width: number): str
   return color(FILLED.repeat(filledCount)) + chalk.dim(EMPTY.repeat(emptyCount));
 }
 
-export function renderLevelProgress(level: number, tokens: number): string {
+export function renderLevelProgress(level: number, tokens: number, delta = 0): string {
   const clampedLevel = Math.max(1, Math.min(5, level));
   const name = LEVEL_NAMES[clampedLevel - 1];
   const color = levelColor(clampedLevel);
   const barWidth = 10;
 
+  // Delta indicator: green + for gains, red - for decay
+  let deltaStr = '';
+  if (delta > 100) {
+    deltaStr = chalk.green(` +${formatTokenCount(delta)}↑`);
+  } else if (delta < -100) {
+    deltaStr = chalk.red(` ${formatTokenCount(delta)}↓`);
+  }
+
   if (clampedLevel === 5) {
     const bar = color(FILLED.repeat(barWidth));
     const label = `${formatTokenCount(tokens)} tokens`;
-    return `${color(`Lv5 ${name}`)} ${bar} ${label} ★`;
+    return `${color(`Lv5 ${name}`)} ${bar} ${label} ★${deltaStr}`;
   }
 
   const currentThreshold = LEVEL_THRESHOLDS[clampedLevel - 1];
@@ -69,7 +77,7 @@ export function renderLevelProgress(level: number, tokens: number): string {
   const currentFmt = formatTokenCount(tokens);
   const nextFmt = formatTokenCount(nextThreshold);
 
-  return `${color(`Lv${clampedLevel} ${name}`)} ${bar} ${currentFmt}/${nextFmt} tokens`;
+  return `${color(`Lv${clampedLevel} ${name}`)} ${bar} ${currentFmt}/${nextFmt}${deltaStr}`;
 }
 
 export function renderTokenHistogram(
